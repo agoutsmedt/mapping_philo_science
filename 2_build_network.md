@@ -1,75 +1,75 @@
-#' ---
-#' title: "Script for building the different types of networks"
-#' author: "Aurélien Goutsmedt"
-#' date: "/ Last compiled on `r format(Sys.Date())`"
-#' output: 
-#'   github_document:
-#'     toc: true
-#'     number_sections: true
-#' ---
+Script for building the different types of networks
+================
+Aurélien Goutsmedt
+/ Last compiled on 2021-08-09
 
-#+ r setup, include = FALSE
-knitr::opts_chunk$set(eval = FALSE,
-                      message = FALSE,
-                      warning = FALSE)
+-   [1 What is this script for?](#what-is-this-script-for)
+-   [2 Loading packages, paths and
+    data](#loading-packages-paths-and-data)
+    -   [2.1 External scripts](#external-scripts)
+    -   [2.2 Loading Data](#loading-data)
+-   [3 Bibliographic Coupling network](#bibliographic-coupling-network)
+    -   [3.1 Building the network](#building-the-network)
 
-#' # What is this script for?
-#' 
-#' In this script, we build different networks (cocitation, coupling and semantic similarity)
-#' for different subperiods. We use the Leiden algorithm to identify communities,
-#' and calculate spatial coordinates using Force Atlas 2 algorithm.
-#' 
-#' > WARNING: This script represents a first step of the project, and some processes have been
-#' improved (notably by the creation of new functions).
-#' 
-#' # Loading packages, paths and data
-#' 
-#' ## External scripts
+# 1 What is this script for?
 
-#+ r load_scripts, eval = TRUE
+In this script, we build different networks (cocitation, coupling and
+semantic similarity) for different subperiods. We use the Leiden
+algorithm to identify communities, and calculate spatial coordinates
+using Force Atlas 2 algorithm.
+
+> WARNING: This script represents a first step of the project, and some
+> processes have been improved (notably by the creation of new
+> functions).
+
+# 2 Loading packages, paths and data
+
+## 2.1 External scripts
+
+``` r
 source("functions.R")
 source("packages_and_paths.R")
+```
 
-#' ## Loading Data
+## 2.2 Loading Data
 
-#+ r load_files, eval = TRUE
+``` r
 direct_citations <- readRDS(paste0(data_path, "cleaned_direct_citations.rds")) %>% 
   as.data.table()
 citing_articles <- readRDS(paste0(data_path, "cleaned_citing_articles.rds")) %>% 
   as.data.table()
+```
 
-#' # Bibliographic Coupling network
-#' 
-#' The first step is to build the network from the citations data. Then we will 
-#' identify different communities through the Leiden algorithm, and use the 
-#' Force Atlas 2 algorithm to find spatial coordinates for each citing document.
-#' Finally we will be able to project the graph.
-#' 
-#' ## Building the network
-#' 
+# 3 Bibliographic Coupling network
 
-#+ r threshold, eval = TRUE
+The first step is to build the network from the citations data. Then we
+will identify different communities through the Leiden algorithm, and
+use the Force Atlas 2 algorithm to find spatial coordinates for each
+citing document. Finally we will be able to project the graph.
+
+## 3.1 Building the network
+
+``` r
 edges_threshold <- 2
 nodes_coupling_threshold <- 0
+```
 
-#' We have to make first choices here. We have to decide if we take all the citing
-#' articles, even if they are not cited at all by other documents in our corpus.
-#' Here, we have decided to 
-#' `r if(nodes_coupling_threshold == 0){paste(" include all citing documents.")} else {paste(" include documents that are cited at least ", nodes_coupling_threshold, " time by other documents of the corpus.")}`
-#' For the links between articles, we use a simple threshold method: we consider
-#' a link between two articles important only if they share `r edges_threshold` references
-#' in common.
-#' 
-#' We have all the authors listed in the `citing_articles` table, so we keep only the first authors for the
-#' coupling. We also keep only the needed information.
-#' 
-#' 
+We have to make first choices here. We have to decide if we take all the
+citing articles, even if they are not cited at all by other documents in
+our corpus. Here, we have decided to include all citing documents. For
+the links between articles, we use a simple threshold method: we
+consider a link between two articles important only if they share 2
+references in common.
 
-#+ r keep_first_author, eval = TRUE
+We have all the authors listed in the `citing_articles` table, so we
+keep only the first authors for the coupling. We also keep only the
+needed information.
 
+``` r
 nodes_coupling <- citing_articles[Seq_No == 1, c("OST_BK","new_ID_Ref","Annee_Bibliographique","Full_Name","revue","titre","Abstract")]
+```
 
-#+ r calculate_citations, eval = TRUE
+``` r
 nb_cit <- direct_citations[, nb_cit := .N, by = "new_ID_Ref"]
 nodes_coupling <- merge(nodes_coupling, unique(nb_cit[, c("new_ID_Ref", "nb_cit")]), by = "new_ID_Ref", all.x = "TRUE")
 
@@ -77,46 +77,55 @@ rm(nb_cit) # not useful anymore
 # replacing NA value by 0 in nb_cit (it means that the nodes will be used in Leiden and Force Atlas, but
 # not displayed in the graph)
 nodes_coupling[is.na(nb_cit), ]$nb_cit <- 0
+```
 
-#' We will look into the distribution of citations in our corpus and will
-#' reduce the number of nodes depending on the threshold (`nodes_coupling_threshold`)
-#' we have chosen.
-#' 
+We will look into the distribution of citations in our corpus and will
+reduce the number of nodes depending on the threshold
+(`nodes_coupling_threshold`) we have chosen.
 
-#+ r distrib_citations, eval = TRUE, message = TRUE
+``` r
 ggplot(nodes_coupling, aes(x = nb_cit)) +
   geom_boxplot(fill = "blue")
+```
 
+![](2_build_network_files/figure-gfm/r%20distrib_citations-1.png)<!-- -->
+
+``` r
 # reducing the number of nodes depending of the number of citations
 nodes_coupling <- nodes_coupling[nb_cit >= nodes_coupling_threshold]
+```
 
-#' The next step just aim at securing that we only take citing documents in the
-#' `direct_citations` that are also within the nodes. We also remove articles
-#' without any references
+The next step just aim at securing that we only take citing documents in
+the `direct_citations` that are also within the nodes. We also remove
+articles without any references
 
-#+ r build_network, eval = TRUE
+``` r
 edges_coupling <- unique(direct_citations[OST_BK %in% nodes_coupling$OST_BK])
 if(length(edges_coupling$OST_BK) == length(direct_citations$OST_BK)){
   message("Everything was ok in the data extraction from the OST db: all the citing documents in the 
           direct citations table are also in the citing documents table.")
 }
 nodes_coupling <- nodes_coupling[OST_BK %in% edges_coupling$OST_BK]
+```
 
-#' We can now create the list of edges. We create two objects, with two different methods (see the
-#' [biblionetwork](https://agoutsmedt.github.io/biblionetwork/) package documentation for more information):
-#' 
-#' - the coupling angle value
-#' - the coupling strength value 
+We can now create the list of edges. We create two objects, with two
+different methods (see the
+[biblionetwork](https://agoutsmedt.github.io/biblionetwork/) package
+documentation for more information):
 
-#+ r build_network_3, eval = TRUE
+-   the coupling angle value
+-   the coupling strength value
+
+``` r
 edges_coupling_angle <- biblio_coupling(edges_coupling, source = "OST_BK", ref = "new_ID_Ref", weight_threshold = edges_threshold)
 edges_coupling_strength <- coupling_strength(edges_coupling, source = "OST_BK", ref = "new_ID_Ref", weight_threshold = edges_threshold)
+```
 
-#' We remove the nodes that are not any more linked because they did not pass the threshold
-#' with any other articles. We can now use the tidygraph and the networkflow packages
-#' and build the two networks.
+We remove the nodes that are not any more linked because they did not
+pass the threshold with any other articles. We can now use the tidygraph
+and the networkflow packages and build the two networks.
 
-#+ r build_network_4, eval = TRUE
+``` r
 nodes_coupling_angle <- nodes_coupling[OST_BK %in% c(edges_coupling_angle$from,edges_coupling_angle$to)]
 nodes_coupling_strength <- nodes_coupling[OST_BK %in% c(edges_coupling_strength$from,edges_coupling_strength$to)]
 
@@ -125,16 +134,13 @@ nodes_coupling_strength[, new_ID_Ref := as.character(OST_BK)]
 
 graph_coupling_angle <- tbl_main_component(edges_coupling_angle, nodes_coupling_angle, directed = FALSE, node_key = "OST_BK")
 graph_coupling_strength <- tbl_main_component(edges_coupling_strength, nodes_coupling_strength, directed = FALSE, node_key = "OST_BK")
+```
 
-#' With the `edges_threshold` fixed at `r edges_threshold`, we have removed
-#' `r length(nodes_coupling$OST_BK) - length(nodes_coupling_angle$OST_BK)` documents.
+With the `edges_threshold` fixed at 2, we have removed 415 documents.
+Before to move further, one small things we can do is to compare the
+distribution of edges weights for the two methods.
 
-
-#' Before to move further, one small things we can do is to compare the distribution of edges weights for the
-#' two methods.
-
-#+ r test_edges_distribution, eval = TRUE
-
+``` r
 compare_distrib <- data.table(angle_weight = edges_coupling_angle$weight,
                               strength_weight = edges_coupling_strength$weight)
 compare_distrib <- pivot_longer(compare_distrib, cols = 1:2, names_to = "Measure", values_to = "Weight")
@@ -150,13 +156,15 @@ ggplot(compare_distrib, aes(Weight, after_stat(count), fill = Measure)) +
                     x = 0.2,
                     y = 28000000,
                     label = paste0("max weight for coupling strength: ", max(edges_coupling_strength$weight)))
+```
 
+![](2_build_network_files/figure-gfm/r%20test_edges_distribution-1.png)<!-- -->
 
-#' Regarding the distribution of the coupling strength, which is much less widespread, it seems preferable, in a first
-#' time to opt for the coupling angle measure, which will allow more difference in the weights of edges.
+Regarding the distribution of the coupling strength, which is much less
+widespread, it seems preferable, in a first time to opt for the coupling
+angle measure, which will allow more difference in the weights of edges.
 
-#+ r Layout, eval = FALSE
-
+``` r
 #Layout
 #graph_before <- tbl %>% activate(nodes) %>% mutate(id=as.character(Id))
 #nodes_before <- tbl %>% activate(nodes) %>% as.data.table()
@@ -180,3 +188,4 @@ if("x" %in% colnames(nodes_before)){
 } else{
   tbl <- tbl %>% activate(nodes) %>% left_join(graph_after)
 }
+```

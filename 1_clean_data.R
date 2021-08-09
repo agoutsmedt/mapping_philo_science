@@ -31,6 +31,8 @@ source("packages_and_paths.R")
 
 direct_citations <- read_excel(paste0(data_path, "Philo_Sciences_Couplage-Cocitation_2010-2020.xlsx")) %>% 
   as.data.table()
+citing_articles <- read_excel(paste0(data_path, "Philo_des_Sciences_2010-2020_Gender_VL.xlsx")) %>% 
+  as.data.table()
 
 
 #' # Cleaning the data
@@ -284,7 +286,16 @@ new_ID <- data.table(cleaned_ID_Ref = unique(direct_citations$cleaned_ID_Ref),
 direct_citations <- merge(direct_citations, new_ID, by = "cleaned_ID_Ref")
 direct_citations <- direct_citations[, -"new_ID"]
 
+#' ## Cleaning the nodes with new ID
+#' 
+#' We can now integrate the new IDs to the `citing_articles` file
+
+new_ID <- direct_citations[, c("UID_Ref", "new_ID_Ref")] %>% 
+  unique()
+citing_articles <- merge(citing_articles, new_ID, by.x = "UID", by.y = "UID_Ref", all.x = TRUE)
+
 #' We can now save the cleaned data to be load in following scripts
 
 saveRDS(direct_citations, paste0(data_path, "cleaned_direct_citations.rds"))
+saveRDS(citing_articles, paste0(data_path, "cleaned_citing_articles.rds"))
                      
