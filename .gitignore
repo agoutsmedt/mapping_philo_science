@@ -5,3 +5,8 @@
 .Rdata
 .httr-oauth
 .DS_Store
+*.graphml
+*.jar
+/pictures
+*.png
+.png

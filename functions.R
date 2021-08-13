@@ -65,6 +65,162 @@ components_distribution <- function(edges, nodes, directed = FALSE, node_key = N
   Components_data <- unique(Components_data[order(components_att), c("components_att", "N_nodes_components", "percentage_nodes_components")])
 }
 
+weight_distrib <- function(citation_data, rescale = FALSE, ...) {
+  #' Compare Weight Distribution for Different Edges Creation Methods
+  #'
+  #' This function creates three edges list from a data frame with citations data
+  #' (a list of citing documents and cited documents). The methods used are 
+  #' the [coupling angle](https://agoutsmedt.github.io/biblionetwork/reference/biblio_coupling.html),
+  #' [coupling strength](https://agoutsmedt.github.io/biblionetwork/reference/coupling_strength.html)
+  #' and [coupling similarity](https://agoutsmedt.github.io/biblionetwork/reference/coupling_similarity.html)
+  #' measures.
+  #'
+  #' @param citation_data
+  #' A dataframe with a list of links between nodes, under the columns "from" and "to". The two columns should
+  #' be characters.
+  #' 
+  #' @param rescale
+  #' If `TRUE`, the weights will be rescaled between 0 and 1 for each method. It
+  #' makes it easier to compare the distributions of each method.
+  #'
+  #' @param ...
+  #' Use here the parameters of the `biblio_coupling()`, `coupling_strength()`
+  #' and `coupling_similarity` functions. 
+ 
+  edges_angle <- biblionetwork::biblio_coupling(citation_data, ...)
+  edges_strength <- biblionetwork::coupling_strength(citation_data, ...)
+  edges_similarity <- biblionetwork::coupling_similarity(citation_data, ...)
+  
+  if(rescale == FALSE){
+  compare_distrib <- data.table("Coupling angle" = edges_angle$weight,
+                                "Coupling strength" = edges_strength$weight,
+                                "Coupling similarity" = edges_similarity$weight)
+  compare_distrib <- pivot_longer(compare_distrib, cols = 1:3, names_to = "Method", values_to = "Weight") %>% 
+    group_by(Method) %>% 
+    mutate(label = paste0("max weight: ", round(max(Weight), 2)))
+  } else {
+    compare_distrib <- data.table("Coupling angle rescale" = scales::rescale(edges_angle$weight, to = c(0,1)),
+                                  "Coupling strength rescale" = scales::rescale(edges_strength$weight, to = c(0,1)),
+                                  "Coupling similarity rescale" = scales::rescale(edges_similarity$weight, to = c(0,1)))
+    compare_distrib <- pivot_longer(compare_distrib, cols = 1:3, names_to = "Method", values_to = "Weight") %>% 
+      group_by(Method) %>% 
+      mutate(label = paste0("max weight: ", round(max(Weight), 2)))
+  }
+  
+  plot <- ggplot(compare_distrib, aes(Weight, after_stat(count), fill = Method)) +
+    geom_density(show.legend = FALSE) +
+    geom_text(aes(label = label, x = Inf, y = Inf), hjust = 1.5, vjust = 1.5) +
+    facet_wrap(~ Method, scales = "free", ncol = 1) +
+    theme_light()
+}
+
+compare_partition <- function(graph, resolutions = seq(0.5,1.5, 0.1)){
+  #' Compare Partitions for Different Leiden Algorithm Resolutions
+  #'
+  #' This function runs the Leiden algorithm for different resolutions value and
+  #' compares the distribution of communities regarding their size, the number 
+  #' of communities and the modularity
+  #'
+  #' @param graph
+  #' A tidygraph network.
+  #'
+  #' @param resolutions
+  #' Choose the different resolutions you want to test with the Leiden algorithm.
+  #' By default, the function starts from 0.5 and goes to 1.5 by decile.   
+  
+  stat_partition <- data.table("Com_ID" = c(),
+                               "Size_Com" = c(),
+                               "Modularity" = c(),
+                               "Resolution" = c(),
+                               "n_community" = c())
+  for(i in resolutions){
+    graph <- networkflow::leiden_workflow(graph, res_1 = i, niter = 1000)
+    
+    partition <- graph %>% 
+      activate(nodes) %>% 
+      as.data.table() %>% 
+      select(Com_ID, Size_com) %>%
+      unique() %>% 
+      mutate(Modularity = modularity(graph, membership = V(graph)$Com_ID),
+             Resolution = i,
+             n_community = length(unique(V(graph)$Com_ID)))
+    
+    stat_partition <- rbind(stat_partition, partition)
+  }
+  
+  coeff_y_axis <- max(stat_partition$n_community) * 1.1
+  
+  stat_partition %>% 
+    ggplot(aes(x = as.character(Resolution), y = Size_com, fill = Com_ID, group = Com_ID)) +
+    geom_col(position = "fill") +
+    scale_fill_viridis_d(option = "magma", direction = -1) +
+    geom_point(aes(y = n_community / coeff_y_axis), size = 2, show.legend = FALSE) +
+    geom_line(aes(y = Modularity), size = 1.5) +
+    scale_y_continuous(name = "Community size and modularity", 
+                       sec.axis = sec_axis(~.*coeff_y_axis, name = "Number of communities")) +
+    scale_x_discrete(name = "Resolutions") +
+    guides(fill = guide_legend(title = "Communities")) +
+    geom_vline(aes(xintercept = as.character(unique(stat_partition[Modularity == max(Modularity)]$Resolution))), linetype = "dashed") +
+    theme_minimal()
+}
+
+name_community_with_words <- function(graph, title_column = "Title", com_column = "Com_ID", n_words = 4, remove_words = NULL){
+  #' Automatically Attributing Names to Communities with Top TF-IDF Words
+  #'
+  #' @description A function to give to a community the name of the most identifying words
+  #' in titles and/or abstracts of the documents within the community.
+  #'
+  #' @param graph A tidygraph object.
+  #'
+  #' @param title_column Enter the name of the column with the words that will
+  #' be used for naming the communities.
+  #'
+  #' @param com_column
+  #' The name of your community identifiers column.
+  #' 
+  #' @param n_words
+  #' The number of words you want to have in the name of the community.
+  #'
+  #' @details The attribute of nodes and edges with the names of the communities is called
+  #' `com_name_by_words`.
+  #'
+  #' @return The same graph object but with a column `com_name_by_words`.
+
+# Finding the words with the highest tf-idf value per community
+  # extracting the nodes
+    nodes <- graph %>%
+      activate(nodes) %>%
+      as.data.table()
+
+    # changing the names of the column for titles and communities
+    colnames(nodes)[colnames(nodes) == com_column] <- "Com_ID"
+    colnames(nodes)[colnames(nodes) == title_column] <- "Titre"
+    
+    tf_idf <- nodes[Titre != "NULL"] %>% 
+      select(Com_ID, Titre) %>% 
+      tidytext::unnest_tokens(word, Titre) %>% 
+      anti_join(tidytext::stop_words) %>% 
+      mutate(word := textstem::lemmatize_words(word)) %>% 
+      count(Com_ID, word) %>%
+      tidytext::bind_tf_idf(word, Com_ID, n)
+    
+    if(length(remove_words) > 0){
+    tf_idf <- tf_idf %>% 
+      filter(! word %in% remove_words)
+    } 
+    
+    top_words <- tf_idf %>% 
+      group_by(Com_ID) %>% 
+      slice_max(order_by = tf_idf, n = n_words, with_ties = FALSE) %>% 
+      mutate(com_name_by_words = paste0(word, collapse = "-")) %>% 
+      select(Com_ID, com_name_by_words) %>% 
+      unique()
+    
+    # adding the name as an attribute to the nodes.
+    graph_coupling <- graph_coupling %>%
+      activate(nodes) %>%
+      inner_join(top_words, by = "Com_ID")
+}
 
 label_com <- function(graph, biggest_community = FALSE, community_threshold = 0.01, community_name_column = "Community_name", community_size_column = "Size_com") {
   #' Displaying the highest cited nodes
@@ -425,7 +581,7 @@ clustering_communities <- function(graph, label_size = 6, number_size = 6, thres
 
 tf_idf <- function(graph = NULL, nodes = NULL, title_column = "Titre", com_column = "Com_ID", color_column = "color",
                    com_name_column = "Community_name", com_size_column = "Size_com", threshold_com = 0.01, number_of_words = 12,
-                   palette = NULL, size_title_wrap = 8, lemmatize_bigrams = TRUE) {
+                   palette = NULL, size_title_wrap = 8, lemmatize_bigrams = TRUE, plot = TRUE) {
   #' Creating a TF-IDF analysis of the titles of WoS corpus
   #'
   #' This function takes as input a tidygraph object or a data frame with nodes, both with a community attribute, and analyzes
@@ -606,6 +762,7 @@ tf_idf <- function(graph = NULL, nodes = NULL, title_column = "Titre", com_colum
   }
   
   # plotting the graph
+  if (plot == TRUE){
   tf_idf_plot <- ggplot(tf_idf_table[Size_com >= threshold_com], aes(reorder_within(word, tf_idf, color), tf_idf, fill = color)) +
     geom_bar(stat = "identity", alpha = .8, show.legend = FALSE) +
     labs(
@@ -620,6 +777,9 @@ tf_idf <- function(graph = NULL, nodes = NULL, title_column = "Titre", com_colum
   
   list_return <- list("plot" = tf_idf_plot, "list_words" = tf_idf_table)
   return(list_return)
+  } else {
+    return(tf_idf_table)
+  }
 }
 
 
